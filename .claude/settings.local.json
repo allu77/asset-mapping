@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk find *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk grep *)",
+      "Bash(uv --version)",
+      "Bash(rtk git *)",
+      "Bash(rtk uv *)",
+      "Bash(uv run *)",
+      "Bash(cdk --version)",
+      "Bash(rtk read *)",
+      "WebSearch",
+      "WebFetch(domain:www.ishares.com)",
+      "WebFetch(domain:www-cdn.msci.com)",
+      "WebFetch(domain:etf.dws.com)",
+      "WebFetch(domain:www.blackrock.com)",
+      "WebFetch(domain:www.marketscreener.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(cdk synth *)"
+    ]
+  }
+}

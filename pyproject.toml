@@ -1,0 +1,25 @@
+[project]
+name = "asset-mapping"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pypdf>=5.0.0",
+    "openpyxl>=3.1.0",
+    "xlrd>=2.0.0",
+    "requests>=2.33.1",
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
+
+[project.optional-dependencies]
+infra = [
+    "aws-cdk-lib>=2.200.0",
+    "constructs>=10.0.0",
+    "aws-cdk.aws-lambda-python-alpha>=2.200.0a0",
+    "python-dotenv>=1.0.0",
+]

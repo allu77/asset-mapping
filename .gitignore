@@ -19,3 +19,4 @@ cdk.out/
 .env
 output
 credentials.json
+settings.local.json

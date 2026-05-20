@@ -17,6 +17,8 @@ import argparse
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from pipeline.download import Downloader, download
 from pipeline.parse import Parser
 from pipeline.process import Processor
@@ -68,9 +70,12 @@ def run_upload(processed_csv_path: Path, credentials_path: Path, index_id: str) 
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Run index holdings pipeline locally")
-    parser.add_argument("--index", required=True, choices=Downloader.index_ids(),
+    parser.add_argument("--index", choices=Downloader.index_ids(),
                         help="Index to process")
+    parser.add_argument("--all", action="store_true",
+                        help="Run for all indexes")
     parser.add_argument("--step", choices=["download", "parse", "process", "upload"],
                         help="Run a single step (default: all steps)")
     parser.add_argument("--input", type=Path,
@@ -81,22 +86,29 @@ def main():
                         help="Output directory (default: output/)")
     args = parser.parse_args()
 
+    if not args.index and not args.all:
+        parser.error("one of --index or --all is required")
+    if args.index and args.all:
+        parser.error("--index and --all are mutually exclusive")
+
     output_dir = args.output
+    index_ids = Downloader.index_ids() if args.all else [args.index]
 
     if args.step == "download":
-        run_download(args.index, output_dir)
+        for index_id in index_ids:
+            run_download(index_id, output_dir)
         return
 
     if args.step == "parse":
         if not args.input:
             parser.error("--input is required for --step parse")
-        run_parse(args.input, output_dir, args.index)
+        run_parse(args.input, output_dir, index_ids[0])
         return
 
     if args.step == "process":
         if not args.input:
             parser.error("--input is required for --step process")
-        run_process(args.input, output_dir, args.index)
+        run_process(args.input, output_dir, index_ids[0])
         return
 
     if args.step == "upload":
@@ -104,15 +116,16 @@ def main():
             parser.error("--input is required for --step upload")
         if not args.credentials:
             parser.error("--credentials is required for --step upload")
-        run_upload(args.input, args.credentials, args.index)
+        run_upload(args.input, args.credentials, index_ids[0])
         return
 
     # Full pipeline
-    downloaded_path = run_download(args.index, output_dir)
-    if args.index in [ "stoxx600", "msci_usa_small_cap_value_weighted", "msci_europe_small_cap_value_weighted", "msci_emerging_markets" ]:
-        downloaded_path = run_parse(downloaded_path, output_dir, args.index)
-    processed_path = run_process(downloaded_path, output_dir, args.index)
-    run_upload(processed_path, args.credentials, args.index)
+    for index_id in index_ids:
+        downloaded_path = run_download(index_id, output_dir)
+        if index_id in ["stoxx600", "msci_usa_small_cap_value_weighted", "msci_europe_small_cap_value_weighted", "msci_emerging_markets", "msci_world_ex_us"]:
+            downloaded_path = run_parse(downloaded_path, output_dir, index_id)
+        processed_path = run_process(downloaded_path, output_dir, index_id)
+        run_upload(processed_path, args.credentials, index_id)
 
 
 if __name__ == "__main__":

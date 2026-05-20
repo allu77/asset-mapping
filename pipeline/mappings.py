@@ -83,6 +83,7 @@ COUNTRY_MAP: dict[str, Country] = {
     "Svezia":                                  Country.SWEDEN,
     "Svizzera":                                Country.SWITZERLAND,
     "Zambia":                                  Country.ZAMBIA,
+    "Messico":                                 Country.MEXICO,
 }
 
 CURRENCY_MAP: dict[Country, Currency] = {

@@ -56,8 +56,6 @@ aws sqs start-message-move-task \
 | `msci_usa_small_cap_value_weighted` | XLSX | `xls/` | yes |
 | `msci_world_ex_us` | XLSX | `xls/` | yes |
 | `msci_world` | CSV | `raw-csv/` | no (direct to processor) |
-| `msci_world_enhanced_value` | CSV | `raw-csv/` | no (direct to processor) |
-| `msci_europe_hedged` | CSV | `raw-csv/` | no (direct to processor) |
 
 ## `pipeline/` Package
 

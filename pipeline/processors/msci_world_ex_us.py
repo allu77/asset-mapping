@@ -6,7 +6,7 @@ class MSCIWorldExUsProcessor(Processor):
     index_id = "msci_world_ex_us"
 
     def filter_row(self, row: dict[str, str]) -> bool:
-        return row.get("Type of Security") == "Azioni"
+        return row.get("Type of Security") == "Azionari"
 
     def process_row(self, row: dict[str, str]) -> Holding:
         return Holding(

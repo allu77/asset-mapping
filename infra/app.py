@@ -24,8 +24,8 @@ google_sheet_id = _get("googleSheetId", "GOOGLE_SHEET_ID")
 if not google_sheet_id:
     raise ValueError("googleSheetId is required — set via -c googleSheetId=x, $GOOGLE_SHEET_ID, or infra/.env")
 
-PipelineStack(
-    app, "Stoxx600Pipeline",
+stack = PipelineStack(
+    app, "AssetMapping",
     alert_email=alert_email,
     google_sheet_id=google_sheet_id,
     env=cdk.Environment(
@@ -33,5 +33,8 @@ PipelineStack(
         region=os.environ.get("CDK_DEFAULT_REGION", "eu-west-1"),
     ),
 )
+
+cdk.Tags.of(stack).add("application", "AssetMapping")
+cdk.Tags.of(stack).add("environment", "prod")
 
 app.synth()

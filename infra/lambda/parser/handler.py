@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -11,11 +12,17 @@ s3 = boto3.client("s3")
 
 
 def handler(event, context):
-    src_key = event["Records"][0]["s3"]["object"]["key"]
+    s3_event = json.loads(event["Records"][0]["body"])
+    if s3_event.get("Event") == "s3:TestEvent":
+        return
+    src_key = s3_event["Records"][0]["s3"]["object"]["key"]
     today = date.today().isoformat()
-    # key format: pdf/{index_id}_{date}.pdf  — date uses dashes, so last _ is the separator
-    index_id = src_key.split("/")[-1].rsplit(".", 1)[0].rsplit("_", 1)[0]
-    tmp = Path(f"/tmp/{index_id}_{today}.pdf")
+    # key formats:
+    #   pdf/{index_id}_{date}.pdf  → strip ext, strip _date
+    #   xls/{index_id}_raw_{date}.xls → strip ext, strip _date, strip _raw
+    index_id = src_key.split("/")[-1].rsplit(".", 1)[0].rsplit("_", 1)[0].removesuffix("_raw")
+    ext = Path(src_key).suffix
+    tmp = Path(f"/tmp/{index_id}_{today}{ext}")
     s3.download_file(S3_BUCKET, src_key, str(tmp))
     parser = Parser.create(index_id)
     records = parser.parse(tmp)

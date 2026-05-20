@@ -1,3 +1,0 @@
-# linux/x86_64 wheels — matches Lambda AL2023 (glibc 2.34)
-google-api-python-client>=2.0.0
-google-auth>=2.0.0

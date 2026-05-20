@@ -9,11 +9,14 @@ A serverless AWS pipeline that monthly downloads index constituent holdings for 
 **Stack:** Python 3.12 Lambdas · AWS CDK (Python) · S3 · EventBridge · SNS · SQS DLQs · CloudWatch  
 **Package manager:** `uv`
 
-See @PIPELINE.md for the full pipeline architecture, module API reference, and instructions for adding a new index.
+Read `PIPELINE.md` for the full pipeline architecture, module API reference, and instructions for adding a new index.
 
 ## Commands
 
 ```bash
+# Install all dependencies (runtime + infra)
+uv sync
+
 # Synthesize CloudFormation template
 cd infra && cdk synth --context alertEmail=you@example.com --context googleSheetId=<id>
 
@@ -35,8 +38,9 @@ uv run python run_local.py --index stoxx600 --step parse --input output/pdf/STOX
 ## Key Non-Obvious Details
 
 - **Shared logic lives in `pipeline/`**, not in Lambda handlers. Handlers are thin wrappers (~15 lines). All core functions are importable locally without AWS.
-- **CDK bundler** (`_PipBundler` in `pipeline_stack.py`): pip-installs each Lambda's `requirements.txt` locally (no Docker), then copies `pipeline/` into the bundle. Falls back to Docker if local install fails.
-- **`Code.from_asset` uses `REPO_ROOT`** (not the Lambda subdirectory) so Docker bundling also has access to `pipeline/`.
+- **Two Lambda Layers**: `PipelineLayer` copies `pipeline/` into `/opt/python/`; `DepsLayer` pip-installs all runtime deps (built via Docker at synth time). Handler zips contain only `handler.py`.
+- **Deps layer is generated at synth time**: `_export_lambda_deps()` in `pipeline_stack.py` runs `uv export --only-group=lambda` to produce `infra/lambda/_deps/requirements.txt`, then Docker pip-installs it. CDK caches the layer by content hash — it only rebuilds when deps change.
+- **Bumping a runtime dep**: edit `[dependency-groups].lambda` in `pyproject.toml` → `uv lock` → next `cdk synth` rebuilds the layer automatically.
 - **Regex order matters**: `SUPERSECTORS` and `COUNTRIES` in `pipeline/parse.py` are sorted longest-first to prevent partial substring matches.
 - **Both `alertEmail` and `googleSheetId`** are required at CDK deploy time — missing either raises `ValueError` immediately.
 - **Memory/timeout** per Lambda: Downloader 128 MB/60s, Parser 512 MB/120s (PDF-heavy), Processor 128 MB/30s.

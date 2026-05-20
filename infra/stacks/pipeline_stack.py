@@ -1,244 +1,210 @@
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import aws_cdk as cdk
-import jsii
 from aws_cdk import (
     Duration,
-    ILocalBundling,
     RemovalPolicy,
-    aws_cloudwatch as cloudwatch,
-    aws_cloudwatch_actions as cw_actions,
-    aws_events as events,
-    aws_events_targets as targets,
-    aws_iam as iam,
-    aws_lambda as lambda_,
-    aws_lambda_event_sources as event_sources,
-    aws_s3 as s3,
-    aws_sns as sns,
-    aws_sns_subscriptions as subscriptions,
-    aws_sqs as sqs,
-    aws_ssm as ssm,
+    aws_cloudwatch,
+    aws_cloudwatch_actions,
+    aws_events,
+    aws_events_targets,
+    aws_iam,
+    aws_lambda,
+    aws_lambda_event_sources,
+    aws_logs,
+    aws_s3,
+    aws_s3_notifications,
+    aws_sns,
+    aws_sns_subscriptions,
+    aws_sqs,
 )
 from constructs import Construct
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+LAMBDA_BASE = REPO_ROOT / "infra" / "lambda"
+_LAYER_DIR = LAMBDA_BASE / "_deps"
+
+sys.path.insert(0, str(REPO_ROOT))
+from pipeline.download import Downloader  # noqa: E402
 
 
-@jsii.implements(ILocalBundling)
-class _PipBundler:
-    """Installs requirements.txt with pip locally and copies the pipeline package."""
-
-    def __init__(self, repo_root: Path, dir_name: str) -> None:
-        self._root = repo_root
-        self._dir_name = dir_name
-
-    def try_bundle(self, output_dir: str, options: cdk.BundlingOptions = None) -> bool:
-        try:
-            entry = self._root / self._dir_name
-            reqs = entry / "requirements.txt"
-            has_deps = reqs.exists() and any(
-                ln.strip() and not ln.startswith("#")
-                for ln in reqs.read_text().splitlines()
-            )
-            if has_deps:
-                subprocess.run(
-                    [
-                        "pip", "install", "-r", "requirements.txt", "-t", output_dir,
-                        "--platform", "manylinux_2_28_x86_64",
-                        "--python-version", "312",
-                        "--implementation", "cp",
-                        "--only-binary", ":all:",
-                        "--no-cache-dir",
-                        "--quiet",
-                    ],
-                    cwd=str(entry),
-                    check=True,
-                )
-            for py_file in entry.glob("*.py"):
-                shutil.copy(py_file, output_dir)
-            shutil.copytree(self._root / "pipeline", Path(output_dir) / "pipeline", dirs_exist_ok=True)
-            return True
-        except Exception:
-            return False
-
-
-def _fn(
-    scope: Construct,
-    id: str,
-    *,
-    entry: Path,
-    runtime: lambda_.Runtime,
-    **kwargs,
-) -> lambda_.Function:
-    """Create a Lambda Function with local pip bundling."""
-    dir_name = entry.name
-    return lambda_.Function(
-        scope, id,
-        runtime=runtime,
-        handler="handler.handler",
-        code=lambda_.Code.from_asset(
-            str(REPO_ROOT),
-            bundling=cdk.BundlingOptions(
-                image=runtime.bundling_image,
-                local=_PipBundler(REPO_ROOT, dir_name),  # type: ignore[arg-type]
-                # Docker fallback (used only if local bundling returns False)
-                command=[
-                    "bash", "-c",
-                    f"pip install -r /asset-input/{dir_name}/requirements.txt -t /asset-output"
-                    f" && cp /asset-input/{dir_name}/*.py /asset-output"
-                    f" && cp -r /asset-input/pipeline /asset-output/pipeline",
-                ],
-            ),
-        ),
-        **kwargs,
+def _export_lambda_deps() -> None:
+    _LAYER_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "uv", "export",
+            "--only-group=lambda",
+            "--no-hashes", "--no-annotate", "--no-header",
+            f"--output-file={_LAYER_DIR / 'requirements.txt'}",
+            f"--project={REPO_ROOT}",
+        ],
+        check=True, cwd=REPO_ROOT,
     )
+
+
+_export_lambda_deps()
+
+
+class _DownloaderTriggers(cdk.NestedStack):
+    def __init__(self, scope: Construct, id: str, *, queue: aws_sqs.Queue, **kwargs) -> None:
+        super().__init__(scope, id, **kwargs)
+        monthly = aws_events.Schedule.cron(minute="0", hour="6", day="28", month="*", year="*")
+        for index_id in Downloader.index_ids():
+            rule_id = "".join(part.capitalize() for part in index_id.split("_")) + "Trigger"
+            aws_events.Rule(
+                self, rule_id,
+                schedule=monthly,
+                targets=[aws_events_targets.SqsQueue(  # type: ignore[arg-type]
+                    queue,
+                    message=aws_events.RuleTargetInput.from_object({"index_id": index_id}),
+                )],
+            )
 
 
 class PipelineStack(cdk.Stack):
     def __init__(self, scope: Construct, id: str, *, alert_email: str, google_sheet_id: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
+        # ── Alerts ────────────────────────────────────────────────────────────
+        alert_topic = aws_sns.Topic(self, "AlertTopic", display_name="Asset Mapping Pipeline Alerts")
+        alert_topic.add_subscription(aws_sns_subscriptions.EmailSubscription(alert_email))  # type: ignore[arg-type]
+
         # ── S3 ────────────────────────────────────────────────────────────────
-        bucket = s3.Bucket(
+        bucket = aws_s3.Bucket(
             self, "Holdings",
-            removal_policy=RemovalPolicy.RETAIN,
+            removal_policy=RemovalPolicy.DESTROY,
             lifecycle_rules=[
-                s3.LifecycleRule(prefix="pdf/", expiration=Duration.days(90))
+                aws_s3.LifecycleRule(prefix="pdf/", expiration=Duration.days(365)),
+                aws_s3.LifecycleRule(prefix="xls/", expiration=Duration.days(365)),
+                aws_s3.LifecycleRule(prefix="raw-csv/", expiration=Duration.days(365)),
+                aws_s3.LifecycleRule(prefix="processed-csv/", expiration=Duration.days(365)),
             ],
         )
 
-        # ── SNS alert topic ───────────────────────────────────────────────────
-        alert_topic = sns.Topic(self, "Alerts", display_name="STOXX 600 Pipeline Alerts")
-        alert_topic.add_subscription(subscriptions.EmailSubscription(alert_email))  # type: ignore[arg-type]
+        runtime = aws_lambda.Runtime.PYTHON_3_12
 
-        # ── Shared helpers ────────────────────────────────────────────────────
-        def make_dlq(name: str) -> sqs.Queue:
-            dlq = sqs.Queue(self, f"{name}DLQ", retention_period=Duration.days(14))
-            cloudwatch.Alarm(
-                self, f"{name}DLQAlarm",
-                metric=dlq.metric_approximate_number_of_messages_visible(),
-                threshold=1,
-                evaluation_periods=1,
-                alarm_description=f"STOXX 600 {name} DLQ has messages — invocation failed after retries",
-            ).add_alarm_action(cw_actions.SnsAction(alert_topic))  # type: ignore[arg-type]
-            return dlq
+        # ── Lambda Layers ──────────────────────────────────────────────────────
+        pipeline_layer = aws_lambda.LayerVersion(
+            self, "PipelineLayer",
+            code=aws_lambda.Code.from_asset(
+                str(REPO_ROOT / "pipeline"),
+                bundling=cdk.BundlingOptions(
+                    image=runtime.bundling_image,
+                    command=[
+                        "bash", "-c",
+                        "mkdir -p /asset-output/python"
+                        " && cp -r /asset-input /asset-output/python/pipeline",
+                    ],
+                ),
+            ),
+            compatible_runtimes=[runtime],
+            compatible_architectures=[aws_lambda.Architecture.ARM_64],
+            description="Shared pipeline package",
+        )
 
-        def wire_error_alarm(fn: lambda_.Function, name: str) -> None:
-            cloudwatch.Alarm(
-                self, f"{name}ErrorAlarm",
-                metric=fn.metric_errors(period=Duration.minutes(5)),
-                threshold=1,
-                evaluation_periods=1,
-                alarm_description=f"STOXX 600 {name} Lambda raised an error",
-            ).add_alarm_action(cw_actions.SnsAction(alert_topic))  # type: ignore[arg-type]
+        deps_layer = aws_lambda.LayerVersion(
+            self, "DepsLayer",
+            code=aws_lambda.Code.from_asset(
+                str(_LAYER_DIR),
+                bundling=cdk.BundlingOptions(
+                    image=runtime.bundling_image,
+                    platform="linux/arm64",
+                    command=[
+                        "bash", "-c",
+                        "pip install --target /asset-output/python"
+                        " -r /asset-input/requirements.txt",
+                    ],
+                ),
+            ),
+            compatible_runtimes=[runtime],
+            compatible_architectures=[aws_lambda.Architecture.ARM_64],
+            description="Lambda runtime dependencies",
+        )
 
-        runtime = lambda_.Runtime.PYTHON_3_12
+        self._runtime = runtime
+        self._pipeline_layer = pipeline_layer
+        self._deps_layer = deps_layer
 
         # ── Lambda 1: Downloader ───────────────────────────────────────────────
-        downloader = _fn(
-            self, "Downloader",
-            entry=REPO_ROOT / "lambda_downloader",
-            runtime=runtime,
+        downloader_timeout = Duration.seconds(60)
+        downloader_queue, _ = self.make_queue("Downloader", downloader_timeout, alert_topic)
+        downloader = self.build_lambda(
+            "Downloader",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=Duration.seconds(60),
-            dead_letter_queue=make_dlq("Downloader"),
+            timeout=downloader_timeout,
+            description="Downloads constituents from source URLs and saves to S3",
+        )
+        downloader.add_event_source(
+            aws_lambda_event_sources.SqsEventSource(downloader_queue, batch_size=1)
         )
         bucket.grant_put(downloader, "pdf/*")
+        bucket.grant_put(downloader, "xls/*")
         bucket.grant_put(downloader, "raw-csv/*")
-        wire_error_alarm(downloader, "Downloader")
 
-        monthly = events.Schedule.cron(minute="0", hour="6", day="1", month="*", year="*")
-
-        # Monthly on the 1st at 06:00 UTC — STOXX Europe 600
-        events.Rule(
-            self, "Stoxx600Trigger",
-            schedule=monthly,
-            targets=[targets.LambdaFunction(  # type: ignore[arg-type, list-item]
-                downloader,
-                event=events.RuleTargetInput.from_object({"index_id": "stoxx600"}),
-            )],
-        )
-
-        # Monthly on the 1st at 06:00 UTC — MSCI World (IWDA)
-        events.Rule(
-            self, "MsciWorldTrigger",
-            schedule=monthly,
-            targets=[targets.LambdaFunction(  # type: ignore[arg-type, list-item]
-                downloader,
-                event=events.RuleTargetInput.from_object({"index_id": "msci_world"}),
-            )],
-        )
-
-        # Monthly on the 1st at 06:00 UTC — MSCI Europe EUR Hedged (IMEAX)
-        events.Rule(
-            self, "MsciEuropeHedgedTrigger",
-            schedule=monthly,
-            targets=[targets.LambdaFunction(  # type: ignore[arg-type, list-item]
-                downloader,
-                event=events.RuleTargetInput.from_object({"index_id": "msci_europe_hedged"}),
-            )],
-        )
+        _DownloaderTriggers(self, "DownloaderTriggers", queue=downloader_queue)
 
         # ── Lambda 2: Parser ───────────────────────────────────────────────────
-        parser = _fn(
-            self, "Parser",
-            entry=REPO_ROOT / "lambda_parser",
-            runtime=runtime,
+        parser_timeout = Duration.seconds(120)
+        parser_queue, _ = self.make_queue("Parser", parser_timeout, alert_topic)
+        parser = self.build_lambda(
+            "Parser",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=Duration.seconds(120),
+            timeout=parser_timeout,
             memory_size=512,
-            dead_letter_queue=make_dlq("Parser"),
+            description="Parses downloaded files (in formats other thanf CSV) from S3 and saves raw CSVs back to S3",
         )
         bucket.grant_read(parser, "pdf/*")
+        bucket.grant_read(parser, "xls/*")
         bucket.grant_put(parser, "raw-csv/*")
-        parser.add_event_source(
-            event_sources.S3EventSource(
-                bucket,
-                events=[s3.EventType.OBJECT_CREATED],
-                filters=[s3.NotificationKeyFilter(prefix="pdf/")],
+        for prefix in ("pdf/", "xls/"):
+            bucket.add_event_notification(
+                aws_s3.EventType.OBJECT_CREATED,
+                aws_s3_notifications.SqsDestination(parser_queue),  # type: ignore[arg-type]
+                aws_s3.NotificationKeyFilter(prefix=prefix),
             )
+        parser.add_event_source(
+            aws_lambda_event_sources.SqsEventSource(parser_queue, batch_size=1)
         )
-        wire_error_alarm(parser, "Parser")
 
         # ── Lambda 3: Processor ────────────────────────────────────────────────
-        processor = _fn(
-            self, "Processor",
-            entry=REPO_ROOT / "lambda_processor",
-            runtime=runtime,
+        processor_timeout = Duration.seconds(30)
+        processor_queue, _ = self.make_queue("Processor", processor_timeout, alert_topic)
+        processor = self.build_lambda(
+            "Processor",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=Duration.seconds(30),
-            dead_letter_queue=make_dlq("Processor"),
+            timeout=processor_timeout,
+            description="Processes raw CSVs from S3 and saves cleaned CSVs in standard format back to S3",
         )
         bucket.grant_read(processor, "raw-csv/*")
         bucket.grant_put(processor, "processed-csv/*")
-        processor.add_event_source(
-            event_sources.S3EventSource(
-                bucket,
-                events=[s3.EventType.OBJECT_CREATED],
-                filters=[s3.NotificationKeyFilter(prefix="raw-csv/")],
-            )
+        bucket.add_event_notification(
+            aws_s3.EventType.OBJECT_CREATED,
+            aws_s3_notifications.SqsDestination(processor_queue),  # type: ignore[arg-type]
+            aws_s3.NotificationKeyFilter(prefix="raw-csv/"),
         )
-        wire_error_alarm(processor, "Processor")
+        processor.add_event_source(
+            aws_lambda_event_sources.SqsEventSource(processor_queue, batch_size=1)
+        )
 
         # ── Lambda 4: Uploader ─────────────────────────────────────────────────
         credentials_param_name = "/iuk/ticker-values/google-credentials"
-        uploader = _fn(
-            self, "Uploader",
-            entry=REPO_ROOT / "lambda_uploader",
-            runtime=runtime,
+        uploader_timeout = Duration.seconds(60)
+        uploader_queue, _ = self.make_queue("Uploader", uploader_timeout, alert_topic)
+        uploader = self.build_lambda(
+            "Uploader",
             environment={
                 "S3_BUCKET": bucket.bucket_name,
                 "GOOGLE_SHEET_ID": google_sheet_id,
                 "GOOGLE_CREDENTIALS_PARAM": credentials_param_name,
             },
-            timeout=Duration.seconds(60),
-            dead_letter_queue=make_dlq("Uploader"),
+            timeout=uploader_timeout,
+            description="Uploads processed CSVs from S3 to Google Sheets",
         )
         bucket.grant_read(uploader, "processed-csv/*")
         uploader.add_to_role_policy(
-            iam.PolicyStatement(
+            aws_iam.PolicyStatement(
                 actions=["ssm:GetParameter"],
                 resources=[
                     self.format_arn(
@@ -249,15 +215,63 @@ class PipelineStack(cdk.Stack):
                 ],
             )
         )
+        bucket.add_event_notification(
+            aws_s3.EventType.OBJECT_CREATED,
+            aws_s3_notifications.SqsDestination(uploader_queue),  # type: ignore[arg-type]
+            aws_s3.NotificationKeyFilter(prefix="processed-csv/"),
+        )
         uploader.add_event_source(
-            event_sources.S3EventSource(
-                bucket,
-                events=[s3.EventType.OBJECT_CREATED],
-                filters=[s3.NotificationKeyFilter(prefix="processed-csv/")],
+            aws_lambda_event_sources.SqsEventSource(
+                uploader_queue,
+                batch_size=10,
+                report_batch_item_failures=True,
             )
         )
-        wire_error_alarm(uploader, "Uploader")
 
-        # ── Outputs ───────────────────────────────────────────────────────────
         cdk.CfnOutput(self, "BucketName", value=bucket.bucket_name)
-        cdk.CfnOutput(self, "AlertTopicArn", value=alert_topic.topic_arn)
+
+    def make_queue(self, name: str, lambda_timeout: Duration, alert_topic: aws_sns.Topic) -> tuple[aws_sqs.Queue, aws_sqs.Queue]:
+        dlq = aws_sqs.Queue(
+            self, f"{name}DLQ",
+            retention_period=Duration.days(14),
+        )
+        alarm = aws_cloudwatch.Alarm(
+            self, f"{name}DLQAlarm",
+            metric=dlq.metric_approximate_number_of_messages_visible(
+                statistic="Maximum",
+                period=Duration.minutes(5),
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=aws_cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=aws_cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        alarm.add_alarm_action(aws_cloudwatch_actions.SnsAction(alert_topic))  # type: ignore[arg-type]
+        queue = aws_sqs.Queue(
+            self, f"{name}Queue",
+            # AWS recommends visibility_timeout >= 6x lambda timeout to avoid
+            # the message becoming visible while Lambda is still executing.
+            visibility_timeout=Duration.seconds(lambda_timeout.to_seconds() * 6),
+            dead_letter_queue=aws_sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=dlq,
+            ),
+        )
+        return queue, dlq
+
+    def build_lambda(self, construct_id: str, **kwargs) -> aws_lambda.Function:
+        log_group = aws_logs.LogGroup(
+            self, f"{construct_id}Logs",
+            retention=aws_logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        return aws_lambda.Function(
+            self, construct_id,
+            code=aws_lambda.Code.from_asset(str(LAMBDA_BASE / construct_id.lower())),
+            handler="handler.handler",
+            runtime=self._runtime,
+            architecture=aws_lambda.Architecture.ARM_64,
+            layers=[self._pipeline_layer, self._deps_layer],
+            log_group=log_group,
+            **kwargs,
+        )

@@ -3,57 +3,89 @@
 ## S3 Prefix Layout
 
 ```
-pdf/                  ← STOXX source PDFs (90-day lifecycle)
-raw-csv/              ← normalised CSVs ready for processing
-  stoxx600_raw_<date>.csv
-  msci_world_raw_<date>.csv          ← iShares CSV downloaded as-is
-  msci_europe_hedged_raw_<date>.csv  ← iShares CSV downloaded as-is
-processed-csv/        ← final output (canonical schema)
-  stoxx600_holdings_<date>.csv
-  msci_world_holdings_<date>.csv
-  msci_europe_hedged_holdings_<date>.csv
+pdf/                  ← STOXX source PDF (365-day lifecycle)
+  stoxx600_raw_<date>.pdf
+xls/                  ← iShares XLS/XLSX files (365-day lifecycle)
+  msci_emerging_markets_raw_<date>.xls
+  msci_europe_small_cap_value_weighted_raw_<date>.xlsx
+  msci_usa_small_cap_value_weighted_raw_<date>.xlsx
+  msci_world_ex_us_raw_<date>.xlsx
+raw-csv/              ← normalised CSVs ready for processing (365-day lifecycle)
+  <index_id>_raw_<date>.csv
+processed-csv/        ← final output, canonical schema (365-day lifecycle)
+  <index_id>_holdings_<date>.csv
 ```
 
 ## Lambda Chain
 
+Every step is SQS-mediated. Each queue has a DLQ (14-day retention, max 3 receives) and a CloudWatch alarm that fires an SNS email when ≥1 message lands in the DLQ.
+
 ```
-EventBridge (monthly, 1st 06:00 UTC)
-  → Downloader    event payload: {"index_id": "stoxx600" | "msci_world"}
-  → S3 put (pdf/ or raw-csv/)
+EventBridge (monthly, 28th 06:00 UTC) — one rule per index_id
+  → DownloaderQueue (SQS)
+  → Downloader Lambda    payload: {"index_id": "<id>"}
+  → S3 put (pdf/, xls/, or raw-csv/)
 
-S3 trigger on pdf/
-  → Parser        STOXX only — PDF → raw-csv/stoxx600_raw_<date>.csv
+S3 notification on pdf/* and xls/*
+  → ParserQueue (SQS)
+  → Parser Lambda        XLS/PDF → raw-csv/<index_id>_raw_<date>.csv
 
-S3 trigger on raw-csv/
-  → Processor     dispatches on filename:
-                    stoxx600_*           → CURRENCY_MAP lookup
-                    msci_world_*         → reads Market Currency column directly
-                    msci_europe_hedged_* → reads Market Currency column directly
-  → S3 put (processed-csv/)
+S3 notification on raw-csv/*
+  → ProcessorQueue (SQS)
+  → Processor Lambda     raw-csv → processed-csv/<index_id>_holdings_<date>.csv
 
-S3 trigger on processed-csv/
-  → Uploader      → Google Sheets (SSM credentials)
+S3 notification on processed-csv/*
+  → UploaderQueue (SQS, batch_size=10, report_batch_item_failures=True)
+  → Uploader Lambda      → Google Sheets tab named <index_id> (SSM credentials)
 ```
+
+**Redriving failures**: any step can be redriven by moving messages from its DLQ back to the main queue:
+```bash
+aws sqs start-message-move-task \
+  --source-arn <DLQ-ARN> \
+  --destination-arn <Queue-ARN>
+```
+
+## Registered Indexes
+
+| index_id | Source format | Download prefix | Parse step |
+|---|---|---|---|
+| `stoxx600` | PDF | `pdf/` | yes |
+| `msci_emerging_markets` | XLS | `xls/` | yes |
+| `msci_europe_small_cap_value_weighted` | XLSX | `xls/` | yes |
+| `msci_usa_small_cap_value_weighted` | XLSX | `xls/` | yes |
+| `msci_world_ex_us` | XLSX | `xls/` | yes |
+| `msci_world` | CSV | `raw-csv/` | no (direct to processor) |
+| `msci_world_enhanced_value` | CSV | `raw-csv/` | no (direct to processor) |
+| `msci_europe_hedged` | CSV | `raw-csv/` | no (direct to processor) |
 
 ## `pipeline/` Package
 
+All classes use an auto-registry pattern (`__init_subclass__`). Submodules in `pipeline/downloaders/`, `pipeline/parsers/`, and `pipeline/processors/` are auto-imported at module load — no central registry edits needed.
+
 ### `download.py`
-- **`INDEXES: dict[str, IndexConfig]`** — registry of all supported indexes.  
-  Each entry declares `url`, `filename` (with `{date}` placeholder), `prefix`, `mime_type`, `referer`.
-- **`download(index_id: str) -> DownloadResult`** — fetches the source file, validates size, returns `(content, key, mime_type)`.
-- Current indexes: `"stoxx600"` (PDF → `pdf/`), `"msci_world"` (iShares CSV → `raw-csv/`), `"msci_europe_hedged"` (iShares CSV → `raw-csv/`).
+
+- **`Downloader`** — ABC. Subclasses declare `index_id`, `url`, `filename` (supports `{date}`), `prefix`, `mime_type`, `referer`.
+- **`Downloader.create(index_id) -> Downloader`** — factory.
+- **`Downloader.index_ids() -> list[str]`** — all registered IDs (used by CDK to generate EventBridge rules).
+- **`Downloader.download() -> DownloadResult`** — fetches source, validates size (>10 KB), raises on 403.
+- **`download(index_id) -> DownloadResult`** — convenience wrapper.
+- **`DownloadResult`** — `(content: bytes, key: str, mime_type: str)`.
 
 ### `parse.py`
-- **`parse_pdf(pdf_path: Path) -> list[dict]`** — STOXX only. Regex-extracts 600 rows from PDF. Raises `ValueError` if count ≠ 600.
-- **`to_csv(records) -> str`** — serialises to canonical raw-csv format.
-- Canonical fields: `Asset Name, Sector, Country, Weight (%)`.
+
+- **`Parser`** — ABC. Subclasses declare `index_id`, `fields` (raw-csv column order), implement `parse(src_path: Path) -> list[dict]`.
+- **`Parser.create(index_id) -> Parser`** — factory.
+- **`Parser.to_csv(records) -> str`** — serialises to raw-csv format using `fields`.
 
 ### `process.py`
-- **`process_records(records: list[dict]) -> list[dict]`** — STOXX: maps country → ISO 4217 via `CURRENCY_MAP`. Raises on unknown country.
-- **`process_msci_world_csv(content: str) -> list[dict]`** — MSCI World: strips iShares BOM + 2-line header, filters `Asset Class == "Equity"`, reads `Market Currency` directly. Validates 1,200–1,600 rows.
-- **`process_msci_europe_hedged_csv(content: str) -> list[dict]`** — MSCI Europe EUR Hedged (IMEAX): same iShares format. Validates 300–500 rows.
-- **`to_csv(records) -> str`** — serialises to canonical processed-csv format.
-- Canonical fields: `Asset Name, Currency, Sector, Weight (%), Country`.
+
+- **`Processor`** — ABC. Subclasses declare `index_id`, override `preprocess`, `filter_row`, `validate`, implement `process_row(row) -> Holding`.
+- **`Processor.create(index_id) -> Processor`** — factory.
+- **`Processor.process(content: str) -> list[Holding]`** — preprocess → parse CSV → filter → map rows → validate weight sum.
+- **`Processor.to_csv(holdings) -> str`** — serialises to canonical output format.
+- **Canonical output fields**: `Asset Name, ISIN, Country, Currency, Sector, Weight (%)`.
+- **`Holding`** — typed dataclass with `name`, `isin`, `country` (`Country` enum), `currency` (`Currency` enum), `sector` (`Sector` enum), `weight`.
 
 ## Local Runner
 
@@ -61,14 +93,15 @@ S3 trigger on processed-csv/
 uv run python run_local.py --index <index_id> [--step download|parse|process] [--input <path>] [--output <dir>]
 ```
 
-- Full pipeline (no `--step`): download → (parse if stoxx600) → process.
-- MSCI World skips the parse step; the downloaded CSV goes straight to process.
+- Full pipeline (no `--step`): download → (parse if index has a Parser) → process.
 - Output mirrors the S3 prefix layout under `./output/`.
 
 ## Adding a New Index
 
-1. Add an `IndexConfig` entry to `INDEXES` in `pipeline/download.py`.  
-   - If it's a structured CSV: set `prefix="raw-csv/"` and add a `process_<name>_csv()` branch in `pipeline/process.py` and `lambda_processor/handler.py`.  
-   - If it's a PDF: set `prefix="pdf/"` and extend `lambda_parser/handler.py` with a new parse branch.
-2. Add an EventBridge rule in `infra/stacks/pipeline_stack.py` with the appropriate `{"index_id": "..."}` payload.
-3. Grant the downloader `bucket.grant_put` for the target prefix if it's new.
+1. **Add a downloader** — create `pipeline/downloaders/<index_id>.py` subclassing `Downloader`. Set `prefix="raw-csv/"` for CSV, `prefix="xls/"` for XLS/XLSX, `prefix="pdf/"` for PDF. The EventBridge trigger is generated automatically from `Downloader.index_ids()` — no CDK changes needed.
+
+2. **Add a parser** (XLS/XLSX/PDF only) — create `pipeline/parsers/<index_id>.py` subclassing `Parser`. Implement `parse(src_path) -> list[dict]`. The Parser Lambda dispatches via `Parser.create(index_id)`.
+
+3. **Add a processor** — create `pipeline/processors/<index_id>.py` subclassing `Processor`. Implement `process_row(row) -> Holding`. The Processor Lambda dispatches via `Processor.create(index_id)`.
+
+4. **Grant S3 access** — if the new index uses a prefix not already covered (`pdf/`, `xls/`, `raw-csv/`), add `bucket.grant_put(downloader, "<prefix>/*")` in `pipeline_stack.py`.

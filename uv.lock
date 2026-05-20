@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -10,7 +10,27 @@ resolution-markers = [
 name = "asset-mapping"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
+
+[package.dev-dependencies]
+dev = [
+    { name = "aws-cdk-lib" },
+    { name = "boto3" },
+    { name = "constructs" },
+    { name = "google-api-python-client" },
+    { name = "google-auth" },
+    { name = "openpyxl" },
+    { name = "pypdf" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "xlrd" },
+]
+infra = [
+    { name = "aws-cdk-lib" },
+    { name = "constructs" },
+    { name = "python-dotenv" },
+]
+lambda = [
+    { name = "boto3" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "openpyxl" },
@@ -19,28 +39,35 @@ dependencies = [
     { name = "xlrd" },
 ]
 
-[package.optional-dependencies]
-infra = [
-    { name = "aws-cdk-aws-lambda-python-alpha" },
-    { name = "aws-cdk-lib" },
-    { name = "constructs" },
-    { name = "python-dotenv" },
-]
-
 [package.metadata]
-requires-dist = [
-    { name = "aws-cdk-aws-lambda-python-alpha", marker = "extra == 'infra'", specifier = ">=2.200.0a0" },
-    { name = "aws-cdk-lib", marker = "extra == 'infra'", specifier = ">=2.200.0" },
-    { name = "constructs", marker = "extra == 'infra'", specifier = ">=10.0.0" },
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "aws-cdk-lib", specifier = ">=2.200.0" },
+    { name = "boto3", specifier = ">=1.43.11" },
+    { name = "constructs", specifier = ">=10.0.0" },
     { name = "google-api-python-client", specifier = ">=2.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pypdf", specifier = ">=5.0.0" },
-    { name = "python-dotenv", marker = "extra == 'infra'", specifier = ">=1.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "xlrd", specifier = ">=2.0.0" },
 ]
-provides-extras = ["infra"]
+infra = [
+    { name = "aws-cdk-lib", specifier = ">=2.200.0" },
+    { name = "constructs", specifier = ">=10.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+lambda = [
+    { name = "boto3", specifier = ">=1.43.11" },
+    { name = "google-api-python-client", specifier = ">=2.0.0" },
+    { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "openpyxl", specifier = ">=3.1.0" },
+    { name = "pypdf", specifier = ">=5.0.0" },
+    { name = "requests", specifier = ">=2.33.1" },
+    { name = "xlrd", specifier = ">=2.0.0" },
+]
 
 [[package]]
 name = "attrs"
@@ -80,22 +107,6 @@ wheels = [
 ]
 
 [[package]]
-name = "aws-cdk-aws-lambda-python-alpha"
-version = "2.252.0a0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aws-cdk-lib" },
-    { name = "constructs" },
-    { name = "jsii" },
-    { name = "publication" },
-    { name = "typeguard" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/bb/8bcf025e2e11ed1f479904d505a533c39d87d75d5e0c975420fbba2129cc/aws_cdk_aws_lambda_python_alpha-2.252.0a0.tar.gz", hash = "sha256:55ca0d33f913d2103614c8e5d42136450f28d77c4a45fb5e2bcb496943b90d8a", size = 98969, upload-time = "2026-04-30T12:31:36.409Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/13/9144de276cc73503a54fec17ff0f7e92f4e1a49858c5de1c551d123ed7aa/aws_cdk_aws_lambda_python_alpha-2.252.0a0-py3-none-any.whl", hash = "sha256:0aa85f03ba3dbc97139c8c87ce66f98be12dc4c3a9150c23152d27f550d7384d", size = 97451, upload-time = "2026-04-30T12:30:43.067Z" },
-]
-
-[[package]]
 name = "aws-cdk-cloud-assembly-schema"
 version = "53.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -125,6 +136,34 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0b/2e/468ed756570af782831bc0518b4f187773b036342ce1b6f3d4e13e6127d8/aws_cdk_lib-2.252.0.tar.gz", hash = "sha256:2498d771ab141599c48494bd2564ee9a4fbaade54befa9356811e9454616d0a0", size = 49479070, upload-time = "2026-04-30T12:31:54.452Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ae/94/32c21ad93dc21554286955fd5ebc68cb91149cc5f7f3154b07927c3fc693/aws_cdk_lib-2.252.0-py3-none-any.whl", hash = "sha256:c96d02582d344ee81ea2ef8a5e22b6e680789973804720ec9f0e95a050257db1", size = 50157828, upload-time = "2026-04-30T12:31:11.041Z" },
+]
+
+[[package]]
+name = "boto3"
+version = "1.43.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+    { name = "jmespath" },
+    { name = "s3transfer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1e/02/195d56d36b900ba28a75fc4c47c858a16237811acfde8f22f6de08236dae/boto3-1.43.11.tar.gz", hash = "sha256:3567c6a1f31d8e6bf151c95f76a2b1f239cce243a768a31747c2ba141c9a0570", size = 113160, upload-time = "2026-05-19T19:40:13.947Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/23/8e0d9f563f2f7e8167f6d521205cb63c29e94249a13732e9c5ae9014dc59/boto3-1.43.11-py3-none-any.whl", hash = "sha256:8b166545ca2d6ea49d308db38b9a4f2c54ff718f3d6a55b3fed0184dc2c21597", size = 140535, upload-time = "2026-05-19T19:40:10.442Z" },
+]
+
+[[package]]
+name = "botocore"
+version = "1.43.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/fa/4bec16fa5a4cde7b593e549238bfeb8ed1bdba9d427888a18c460a1f2352/botocore-1.43.11.tar.gz", hash = "sha256:d7d479cc2809ec2728f2898521003adfb79bfe6a4615c59dfd222ec52b0cee6b", size = 15364020, upload-time = "2026-05-19T19:39:58.317Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/9a/9f1d955c2eebefb6bd20de740ae7a05e7b015c63f0f01dba338dcf29cc68/botocore-1.43.11-py3-none-any.whl", hash = "sha256:0108b5604df5a26918936c845e1e761866ee9ea8d1c1f9358ed3c69afdc37436", size = 15043467, upload-time = "2026-05-19T19:39:53.176Z" },
 ]
 
 [[package]]
@@ -491,6 +530,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
 name = "jsii"
 version = "1.129.0"
 source = { registry = "https://pypi.org/simple" }
@@ -638,6 +686,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5f/a4/98b9c7c6428a668bf7e42ebb7c79d576a1c3c1e3ae2d47e674b468388871/requests-2.33.1.tar.gz", hash = "sha256:18817f8c57c6263968bc123d237e3b8b08ac046f5456bd1e307ee8f4250d3517", size = 134120, upload-time = "2026-03-30T16:09:15.531Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/8e/7540e8a2036f79a125c1d2ebadf69ed7901608859186c856fa0388ef4197/requests-2.33.1-py3-none-any.whl", hash = "sha256:4e6d1ef462f3626a1f0a0a9c42dd93c63bad33f9f1c1937509b8c5c8718ab56a", size = 64947, upload-time = "2026-03-30T16:09:13.83Z" },
+]
+
+[[package]]
+name = "s3transfer"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9b/ec/7c692cde9125b77e84b307354d4fb705f98b8ccad59a036d5957ca75bfc3/s3transfer-0.17.0.tar.gz", hash = "sha256:9edeb6d1c3c2f89d6050348548834ad8289610d886e5bf7b7207728bd43ce33a", size = 155337, upload-time = "2026-04-29T22:07:36.33Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/72/c6c32d2b657fa3dad1de340254e14390b1e334ce38268b7ad51abda3c8c2/s3transfer-0.17.0-py3-none-any.whl", hash = "sha256:ce3801712acf4ad3e89fb9990df97b4972e93f4b3b0004d214be5bce12814c20", size = 86811, upload-time = "2026-04-29T22:07:34.966Z" },
 ]
 
 [[package]]

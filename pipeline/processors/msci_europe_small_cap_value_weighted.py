@@ -10,6 +10,7 @@ class MSCIEuropeSmallCapValueWeightedProcessor(Processor):
 
     def process_row(self, row: dict[str, str]) -> Holding:
         return Holding(
+            isin=row["ISIN"],
             name=row["Security Name"],
             country=self.resolve_country(row["Trade Country Name"]),
             currency=Currency(row["Currency"]),

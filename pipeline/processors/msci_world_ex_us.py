@@ -10,6 +10,7 @@ class MSCIWorldExUsProcessor(Processor):
 
     def process_row(self, row: dict[str, str]) -> Holding:
         return Holding(
+            isin=row["ISIN"],
             name=row["Name"],
             country=self.resolve_country(row["Country"]),
             currency=Currency(row["Currency"]),

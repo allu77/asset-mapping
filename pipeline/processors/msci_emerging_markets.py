@@ -10,6 +10,7 @@ class MSCIEmergingMarketsProcessor(Processor):
 
     def process_row(self, row: dict[str, str]) -> Holding:
         return Holding(
+            isin=row["ISIN"],
             name=row["SecurityName"],
             country=self.resolve_country(row["Country"]),
             currency=Currency(row["LocalCurrencyCode"]),

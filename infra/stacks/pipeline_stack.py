@@ -190,7 +190,7 @@ class PipelineStack(cdk.Stack):
 
         # ── Lambda 4: Uploader ─────────────────────────────────────────────────
         credentials_param_name = "/iuk/ticker-values/google-credentials"
-        uploader_timeout = Duration.seconds(60)
+        uploader_timeout = Duration.seconds(180)
         uploader_queue, _ = self.make_queue("Uploader", uploader_timeout, alert_topic)
         uploader = self.build_lambda(
             "Uploader",
@@ -223,8 +223,6 @@ class PipelineStack(cdk.Stack):
         uploader.add_event_source(
             aws_lambda_event_sources.SqsEventSource(
                 uploader_queue,
-                batch_size=10,
-                report_batch_item_failures=True,
             )
         )
 

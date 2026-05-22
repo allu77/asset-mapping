@@ -67,6 +67,7 @@ class Country(str, Enum):
     INDIA          = "India"
     INDONESIA      = "Indonesia"
     IRELAND        = "Ireland"
+    ISLE_OF_MAN    = "Isle of Man"
     ISRAEL         = "Israel"
     ITALY          = "Italy"
     JAPAN          = "Japan"

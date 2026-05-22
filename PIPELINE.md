@@ -35,8 +35,9 @@ S3 notification on raw-csv/*
   → Processor Lambda     raw-csv → processed-csv/<index_id>_holdings_<date>.csv
 
 S3 notification on processed-csv/*
-  → UploaderQueue (SQS, batch_size=10, report_batch_item_failures=True)
+  → UploaderQueue (SQS, batch_size=1, max_concurrency=2)
   → Uploader Lambda      → Google Sheets tab named <index_id> (SSM credentials)
+                           (at most 2 concurrent uploads; each index writes its own tab)
 ```
 
 **Redriving failures**: any step can be redriven by moving messages from its DLQ back to the main queue:
@@ -84,6 +85,11 @@ All classes use an auto-registry pattern (`__init_subclass__`). Submodules in `p
 - **`Processor.to_csv(holdings) -> str`** — serialises to canonical output format.
 - **Canonical output fields**: `Asset Name, ISIN, Country, Currency, Sector, Weight (%)`.
 - **`Holding`** — typed dataclass with `name`, `isin`, `country` (`Country` enum), `currency` (`Currency` enum), `sector` (`Sector` enum), `weight`.
+
+### `upload.py`
+
+- **`upload(csv_content, credentials_json, sheet_id, sheet_name) -> dict`** — clears `{sheet_name}!A:F`, then writes all rows starting at A1.
+- Uses **`google.auth.transport.requests.AuthorizedSession`** (a `requests.Session` subclass) to call the Sheets REST API directly. Do **not** switch to `google-api-python-client` / `httplib2`: on Lambda, `httplib2` causes systematic 2–3 minute hangs and `SSLEOFError` during token refresh due to stale-connection retries in Lambda's network environment. `requests` handles connection lifecycle correctly and reduces upload time to a few seconds.
 
 ## Local Runner
 

@@ -18,33 +18,29 @@ processed-csv/        ← final output, canonical schema (365-day lifecycle)
 
 ## Lambda Chain
 
-Every step is SQS-mediated. Each queue has a DLQ (14-day retention, max 3 receives) and a CloudWatch alarm that fires an SNS email when ≥1 message lands in the DLQ.
+Each step is triggered by a direct push (EventBridge → Lambda, S3 notification → Lambda). There are no main SQS queues. Each Lambda has `retry_attempts=2`; if all retries are exhausted the event is written to a DLQ (SQS, 14-day retention). A CloudWatch alarm fires an SNS email when ≥1 message lands in any DLQ.
 
 ```
 EventBridge (monthly, 28th 06:00 UTC) — one rule per index_id
-  → DownloaderQueue (SQS)
   → Downloader Lambda    payload: {"index_id": "<id>"}
   → S3 put (pdf/, xls/, or raw-csv/)
 
 S3 notification on pdf/* and xls/*
-  → ParserQueue (SQS)
   → Parser Lambda        XLS/PDF → raw-csv/<index_id>_raw_<date>.csv
 
 S3 notification on raw-csv/*
-  → ProcessorQueue (SQS)
   → Processor Lambda     raw-csv → processed-csv/<index_id>_holdings_<date>.csv
 
 S3 notification on processed-csv/*
-  → UploaderQueue (SQS, batch_size=1, max_concurrency=2)
   → Uploader Lambda      → Google Sheets tab named <index_id> (SSM credentials)
-                           (at most 2 concurrent uploads; each index writes its own tab)
 ```
 
-**Redriving failures**: any step can be redriven by moving messages from its DLQ back to the main queue:
+**Redriving failures**: use `redrive.py` to inspect DLQs and re-invoke the target Lambda:
 ```bash
-aws sqs start-message-move-task \
-  --source-arn <DLQ-ARN> \
-  --destination-arn <Queue-ARN>
+uv run python redrive.py                        # interactive: all queues
+uv run python redrive.py --queue parser         # interactive: one queue
+uv run python redrive.py --index_id stoxx600    # filter by index across all queues
+uv run python redrive.py --all                  # non-interactive: redrive everything
 ```
 
 ## Registered Indexes

@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import date
 from pathlib import Path
@@ -12,10 +11,9 @@ s3 = boto3.client("s3")
 
 
 def handler(event, context):
-    s3_event = json.loads(event["Records"][0]["body"])
-    if s3_event.get("Event") == "s3:TestEvent":
+    if event.get("Event") == "s3:TestEvent":
         return
-    src_key = s3_event["Records"][0]["s3"]["object"]["key"]
+    src_key = event["Records"][0]["s3"]["object"]["key"]
     today = date.today().isoformat()
     # key formats:
     #   pdf/{index_id}_{date}.pdf  → strip ext, strip _date

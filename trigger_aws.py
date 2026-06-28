@@ -1,5 +1,5 @@
 """
-Trigger the AWS pipeline by pushing events to the Downloader SQS queue.
+Trigger the AWS pipeline by invoking the Downloader Lambda directly.
 
 Usage:
     uv run python trigger_aws.py --index stoxx600
@@ -16,18 +16,17 @@ from pipeline.download import Downloader
 STACK_NAME = "AssetMapping"
 
 
-def _get_downloader_queue_url() -> str:
+def _get_downloader_fn_name() -> str:
     cf = boto3.client("cloudformation")
     paginator = cf.get_paginator("list_stack_resources")
     for page in paginator.paginate(StackName=STACK_NAME):
         for r in page["StackResourceSummaries"]:
             if (
-                r["ResourceType"] == "AWS::SQS::Queue"
-                and "DownloaderQueue" in r["LogicalResourceId"]
-                and "DLQ" not in r["LogicalResourceId"]
+                r["ResourceType"] == "AWS::Lambda::Function"
+                and r["LogicalResourceId"].startswith("Downloader")
             ):
                 return r["PhysicalResourceId"]
-    raise RuntimeError(f"DownloaderQueue not found in CloudFormation stack '{STACK_NAME}'")
+    raise RuntimeError(f"Downloader Lambda not found in CloudFormation stack '{STACK_NAME}'")
 
 
 def main() -> None:
@@ -40,17 +39,21 @@ def main() -> None:
 
     index_ids = Downloader.index_ids() if args.all else [args.index]
 
-    print(f"Resolving DownloaderQueue in stack '{STACK_NAME}'...")
+    print(f"Resolving Downloader Lambda in stack '{STACK_NAME}'...")
     try:
-        queue_url = _get_downloader_queue_url()
+        fn_name = _get_downloader_fn_name()
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"Queue: {queue_url}\n")
+    print(f"Function: {fn_name}\n")
 
-    sqs = boto3.client("sqs")
+    lam = boto3.client("lambda")
     for index_id in index_ids:
-        sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"index_id": index_id}))
+        lam.invoke(
+            FunctionName=fn_name,
+            InvocationType="Event",
+            Payload=json.dumps({"index_id": index_id}).encode(),
+        )
         print(f"Triggered  {index_id}")
 
 

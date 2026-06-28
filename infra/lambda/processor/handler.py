@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import date
 
@@ -11,10 +10,9 @@ s3 = boto3.client("s3")
 
 
 def handler(event, context):
-    s3_event = json.loads(event["Records"][0]["body"])
-    if s3_event.get("Event") == "s3:TestEvent":
+    if event.get("Event") == "s3:TestEvent":
         return
-    src_key = s3_event["Records"][0]["s3"]["object"]["key"]
+    src_key = event["Records"][0]["s3"]["object"]["key"]
     today = date.today().isoformat()
     # key format: raw-csv/{index_id}_raw_{date}.csv
     index_id = src_key.split("/")[-1].split("_raw_")[0]

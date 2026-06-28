@@ -12,7 +12,7 @@ from aws_cdk import (
     aws_events_targets,
     aws_iam,
     aws_lambda,
-    aws_lambda_event_sources,
+    aws_lambda_destinations,
     aws_logs,
     aws_s3,
     aws_s3_notifications,
@@ -48,7 +48,7 @@ _export_lambda_deps()
 
 
 class _DownloaderTriggers(cdk.NestedStack):
-    def __init__(self, scope: Construct, id: str, *, queue: aws_sqs.Queue, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, *, fn: aws_lambda.Function, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         monthly = aws_events.Schedule.cron(minute="0", hour="6", day="28", month="*", year="*")
         for index_id in Downloader.index_ids():
@@ -56,9 +56,9 @@ class _DownloaderTriggers(cdk.NestedStack):
             aws_events.Rule(
                 self, rule_id,
                 schedule=monthly,
-                targets=[aws_events_targets.SqsQueue(  # type: ignore[arg-type]
-                    queue,
-                    message=aws_events.RuleTargetInput.from_object({"index_id": index_id}),
+                targets=[aws_events_targets.LambdaFunction(  # type: ignore[arg-type]
+                    fn,
+                    event=aws_events.RuleTargetInput.from_object({"index_id": index_id}),
                 )],
             )
 
@@ -128,32 +128,31 @@ class PipelineStack(cdk.Stack):
         self._deps_layer = deps_layer
 
         # ── Lambda 1: Downloader ───────────────────────────────────────────────
-        downloader_timeout = Duration.seconds(60)
-        downloader_queue, _ = self.make_queue("Downloader", downloader_timeout, alert_topic)
+        downloader_dlq = self.make_dlq("Downloader", alert_topic)
         downloader = self.build_lambda(
             "Downloader",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=downloader_timeout,
+            timeout=Duration.seconds(60),
             description="Downloads constituents from source URLs and saves to S3",
-        )
-        downloader.add_event_source(
-            aws_lambda_event_sources.SqsEventSource(downloader_queue, batch_size=1)
         )
         bucket.grant_put(downloader, "pdf/*")
         bucket.grant_put(downloader, "xls/*")
         bucket.grant_put(downloader, "raw-csv/*")
+        downloader.configure_async_invoke(
+            on_failure=aws_lambda_destinations.SqsDestination(downloader_dlq),
+            retry_attempts=2,
+        )
 
-        _DownloaderTriggers(self, "DownloaderTriggers", queue=downloader_queue)
+        _DownloaderTriggers(self, "DownloaderTriggers", fn=downloader)
 
         # ── Lambda 2: Parser ───────────────────────────────────────────────────
-        parser_timeout = Duration.seconds(120)
-        parser_queue, _ = self.make_queue("Parser", parser_timeout, alert_topic)
+        parser_dlq = self.make_dlq("Parser", alert_topic)
         parser = self.build_lambda(
             "Parser",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=parser_timeout,
+            timeout=Duration.seconds(120),
             memory_size=512,
-            description="Parses downloaded files (in formats other thanf CSV) from S3 and saves raw CSVs back to S3",
+            description="Parses downloaded files (in formats other than CSV) from S3 and saves raw CSVs back to S3",
         )
         bucket.grant_read(parser, "pdf/*")
         bucket.grant_read(parser, "xls/*")
@@ -161,37 +160,37 @@ class PipelineStack(cdk.Stack):
         for prefix in ("pdf/", "xls/"):
             bucket.add_event_notification(
                 aws_s3.EventType.OBJECT_CREATED,
-                aws_s3_notifications.SqsDestination(parser_queue),  # type: ignore[arg-type]
+                aws_s3_notifications.LambdaDestination(parser),  # type: ignore[arg-type]
                 aws_s3.NotificationKeyFilter(prefix=prefix),
             )
-        parser.add_event_source(
-            aws_lambda_event_sources.SqsEventSource(parser_queue, batch_size=1)
+        parser.configure_async_invoke(
+            on_failure=aws_lambda_destinations.SqsDestination(parser_dlq),
+            retry_attempts=2,
         )
 
         # ── Lambda 3: Processor ────────────────────────────────────────────────
-        processor_timeout = Duration.seconds(30)
-        processor_queue, _ = self.make_queue("Processor", processor_timeout, alert_topic)
+        processor_dlq = self.make_dlq("Processor", alert_topic)
         processor = self.build_lambda(
             "Processor",
             environment={"S3_BUCKET": bucket.bucket_name},
-            timeout=processor_timeout,
+            timeout=Duration.seconds(30),
             description="Processes raw CSVs from S3 and saves cleaned CSVs in standard format back to S3",
         )
         bucket.grant_read(processor, "raw-csv/*")
         bucket.grant_put(processor, "processed-csv/*")
         bucket.add_event_notification(
             aws_s3.EventType.OBJECT_CREATED,
-            aws_s3_notifications.SqsDestination(processor_queue),  # type: ignore[arg-type]
+            aws_s3_notifications.LambdaDestination(processor),  # type: ignore[arg-type]
             aws_s3.NotificationKeyFilter(prefix="raw-csv/"),
         )
-        processor.add_event_source(
-            aws_lambda_event_sources.SqsEventSource(processor_queue, batch_size=1)
+        processor.configure_async_invoke(
+            on_failure=aws_lambda_destinations.SqsDestination(processor_dlq),
+            retry_attempts=2,
         )
 
         # ── Lambda 4: Uploader ─────────────────────────────────────────────────
         credentials_param_name = "/iuk/ticker-values/google-credentials"
-        uploader_timeout = Duration.seconds(180)
-        uploader_queue, _ = self.make_queue("Uploader", uploader_timeout, alert_topic)
+        uploader_dlq = self.make_dlq("Uploader", alert_topic)
         uploader = self.build_lambda(
             "Uploader",
             environment={
@@ -199,7 +198,7 @@ class PipelineStack(cdk.Stack):
                 "GOOGLE_SHEET_ID": google_sheet_id,
                 "GOOGLE_CREDENTIALS_PARAM": credentials_param_name,
             },
-            timeout=uploader_timeout,
+            timeout=Duration.seconds(180),
             description="Uploads processed CSVs from S3 to Google Sheets",
         )
         bucket.grant_read(uploader, "processed-csv/*")
@@ -217,18 +216,17 @@ class PipelineStack(cdk.Stack):
         )
         bucket.add_event_notification(
             aws_s3.EventType.OBJECT_CREATED,
-            aws_s3_notifications.SqsDestination(uploader_queue),  # type: ignore[arg-type]
+            aws_s3_notifications.LambdaDestination(uploader),  # type: ignore[arg-type]
             aws_s3.NotificationKeyFilter(prefix="processed-csv/"),
         )
-        uploader.add_event_source(
-            aws_lambda_event_sources.SqsEventSource(
-                uploader_queue,
-            )
+        uploader.configure_async_invoke(
+            on_failure=aws_lambda_destinations.SqsDestination(uploader_dlq),
+            retry_attempts=2,
         )
 
         cdk.CfnOutput(self, "BucketName", value=bucket.bucket_name)
 
-    def make_queue(self, name: str, lambda_timeout: Duration, alert_topic: aws_sns.Topic) -> tuple[aws_sqs.Queue, aws_sqs.Queue]:
+    def make_dlq(self, name: str, alert_topic: aws_sns.Topic) -> aws_sqs.Queue:
         dlq = aws_sqs.Queue(
             self, f"{name}DLQ",
             retention_period=Duration.days(14),
@@ -245,17 +243,7 @@ class PipelineStack(cdk.Stack):
             treat_missing_data=aws_cloudwatch.TreatMissingData.NOT_BREACHING,
         )
         alarm.add_alarm_action(aws_cloudwatch_actions.SnsAction(alert_topic))  # type: ignore[arg-type]
-        queue = aws_sqs.Queue(
-            self, f"{name}Queue",
-            # AWS recommends visibility_timeout >= 6x lambda timeout to avoid
-            # the message becoming visible while Lambda is still executing.
-            visibility_timeout=Duration.seconds(lambda_timeout.to_seconds() * 6),
-            dead_letter_queue=aws_sqs.DeadLetterQueue(
-                max_receive_count=3,
-                queue=dlq,
-            ),
-        )
-        return queue, dlq
+        return dlq
 
     def build_lambda(self, construct_id: str, **kwargs) -> aws_lambda.Function:
         log_group = aws_logs.LogGroup(

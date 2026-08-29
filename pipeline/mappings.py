@@ -86,6 +86,7 @@ COUNTRY_MAP: dict[str, Country] = {
     "Svizzera":                                Country.SWITZERLAND,
     "Zambia":                                  Country.ZAMBIA,
     "Messico":                                 Country.MEXICO,
+    "Ucraina":                                 Country.UKRAINE,
 }
 
 CURRENCY_MAP: dict[Country, Currency] = {
@@ -139,6 +140,7 @@ CURRENCY_MAP: dict[Country, Currency] = {
     Country.TAIWAN:              Currency.TWD,
     Country.THAILAND:            Currency.THB,
     Country.TURKEY:              Currency.TRY,
+    Country.UKRAINE:             Currency.UAH,
     Country.UNITED_ARAB_EMIRATES: Currency.AED,
     Country.UNITED_KINGDOM:      Currency.GBP,
     Country.UNITED_STATES:       Currency.USD,
